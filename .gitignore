@@ -1,0 +1,6 @@
+*.o
+tests
+tests-alpha
+tests-pisa
+sim-bpred
+sysprobe
