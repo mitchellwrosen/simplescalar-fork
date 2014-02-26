@@ -4,3 +4,4 @@ tests-alpha
 tests-pisa
 sim-bpred
 sysprobe
+libexo/libexo.a
