@@ -281,7 +281,7 @@ struct bpred_dir_t* bpred_dir_alloc(enum bpred_class class) {
   struct bpred_dir_t *pred_dir;
   if (!(pred_dir = calloc(1, sizeof(struct bpred_dir_t))))
     fatal("out of virtual memory");
-  pred_dir->class = BPred2bit;
+  pred_dir->class = class;
   return pred_dir;
 }
 
