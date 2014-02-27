@@ -211,8 +211,8 @@ struct bpred_t* bpred_create_smart_static();
 struct bpred_t* bpred_create_nbit(
     unsigned int nbits,           /* number of saturating counter bits */
     unsigned int bimod_size,      /* bimod table size */
-    unsigned int btb_sets,        /* number of sets in BTB */
-    unsigned int btb_assoc,       /* BTB associativity */
+    int btb_sets,                 /* number of sets in BTB */
+    int btb_assoc,                /* BTB associativity */
     unsigned int retstack_size);  /* num entries in ret-addr stack */
 struct bpred_t* bpred_create_2level(
     unsigned int nbits,           /* number of saturating counter bits */
@@ -220,8 +220,8 @@ struct bpred_t* bpred_create_2level(
     unsigned int l2size,          /* 2lev l2 table size */
     unsigned int shift_width,     /* history register width */
     unsigned int xor,             /* history xor address flag */
-    unsigned int btb_sets,        /* number of sets in BTB */
-    unsigned int btb_assoc,       /* BTB associativity */
+    int btb_sets,                 /* number of sets in BTB */
+    int btb_assoc,                /* BTB associativity */
     unsigned int retstack_size);  /* num entries in ret-addr stack */
 struct bpred_t* bpred_create_comb(
     unsigned int bimod_size,      /* bimod table size */
@@ -230,8 +230,8 @@ struct bpred_t* bpred_create_comb(
     unsigned int meta_size,       /* meta table size */
     unsigned int shift_width,     /* history register width */
     unsigned int xor,             /* history xor address flag */
-    unsigned int btb_sets,        /* number of sets in BTB */
-    unsigned int btb_assoc,       /* BTB associativity */
+    int btb_sets,                 /* number of sets in BTB */
+    int btb_assoc,                /* BTB associativity */
     unsigned int retstack_size);  /* num entries in ret-addr stack */
 
 /* create a branch direction predictor */
@@ -249,19 +249,16 @@ struct bpred_dir_t* bpred_dir_create_2level(
     unsigned int xor);         /* history xor address flag */
 
 /* print branch predictor configuration */
-void
-print_bpred_config(struct bpred_t *pred,  /* branch predictor instance */
-                   FILE *stream);         /* output stream */
+void print_bpred_config(struct bpred_t *pred,  /* branch predictor instance */
+                        FILE *stream);         /* output stream */
 
 /* print predictor stats */
-void
-print_bpred_stats(struct bpred_t *pred,  /* branch predictor instance */
-                  FILE *stream);         /* output stream */
+void print_bpred_stats(struct bpred_t *pred,  /* branch predictor instance */
+                       FILE *stream);         /* output stream */
 
 /* register branch predictor stats */
-void
-bpred_reg_stats(struct bpred_t *pred,  /* branch predictor instance */
-    struct stat_sdb_t *sdb);/* stats database */
+void bpred_reg_stats(struct bpred_t *pred,     /* branch predictor instance */
+                     struct stat_sdb_t *sdb);  /* stats database */
 
 /* reset stats after priming, if appropriate */
 void bpred_after_priming(struct bpred_t *bpred);

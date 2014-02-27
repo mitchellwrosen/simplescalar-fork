@@ -65,15 +65,15 @@
 static struct bpred_t* bpred_alloc(enum bpred_class class);
 static void bpred_alloc_btb(
     struct bpred_t* pred,
-    unsigned int btb_sets,
-    unsigned int btb_assoc);
+    int btb_sets,
+    int btb_assoc);
 static void bpred_alloc_retaddr_stack(
     struct bpred_t* pred,
     unsigned int retstack_size);
 static void bpred_alloc_btb_and_retaddr_stack(
     struct bpred_t* pred,
-    unsigned int btb_sets,
-    unsigned int btb_assoc,
+    int btb_sets,
+    int btb_assoc,
     unsigned int retstack_size);
 
 static struct bpred_dir_t* bpred_dir_alloc(enum bpred_class class);
@@ -174,8 +174,8 @@ struct bpred_t*  /* branch predictory instance */
 bpred_create_nbit(
     unsigned int nbits,          /* number of saturating counter bits */
     unsigned int bimod_size,     /* bimod table size */
-    unsigned int btb_sets,       /* number of sets in BTB */
-    unsigned int btb_assoc,      /* BTB associativity */
+    int btb_sets,                /* number of sets in BTB */
+    int btb_assoc,               /* BTB associativity */
     unsigned int retstack_size)  /* num entries in ret-addr stack */
 {
   struct bpred_t* pred = bpred_alloc(BPredNbit);
@@ -191,8 +191,8 @@ bpred_create_2level(
     unsigned int l2size,         /* 2lev l2 table size */
     unsigned int shift_width,    /* history register width */
     unsigned int xor,            /* history xor address flag */
-    unsigned int btb_sets,       /* number of sets in BTB */
-    unsigned int btb_assoc,      /* BTB associativity */
+    int btb_sets,                /* number of sets in BTB */
+    int btb_assoc,               /* BTB associativity */
     unsigned int retstack_size)  /* num entries in ret-addr stack */
 {
   struct bpred_t* pred = bpred_alloc(BPred2Level);
@@ -208,8 +208,8 @@ struct bpred_t* bpred_create_comb(
     unsigned int meta_size,      /* meta table size */
     unsigned int shift_width,    /* history register width */
     unsigned int xor,            /* history xor address flag */
-    unsigned int btb_sets,       /* number of sets in BTB */
-    unsigned int btb_assoc,      /* BTB associativity */
+    int btb_sets,                /* number of sets in BTB */
+    int btb_assoc,               /* BTB associativity */
     unsigned int retstack_size)  /* num entries in ret-addr stack */
 {
   struct bpred_t* pred = bpred_alloc(BPredComb);
@@ -231,14 +231,18 @@ struct bpred_t* bpred_alloc(enum bpred_class class) {
 
 // static
 void bpred_alloc_btb(struct bpred_t* pred,
-                     unsigned int btb_sets,
-                     unsigned int btb_assoc) {
+                     int btb_sets,
+                     int btb_assoc) {
   int i;
 
+  pred->btb = NULL;
+  if (btb_sets == -1 && btb_assoc == -1) // sentinel values
+    return;
+
   if (!btb_sets || (btb_sets & (btb_sets-1)) != 0)
-    fatal("number of BTB sets must be non-zero and a power of two");
+    fatal("number of BTB sets must be non-zero and a power of two (or -1 for no BTB)");
   if (!btb_assoc || (btb_assoc & (btb_assoc-1)) != 0)
-    fatal("BTB associativity must be non-zero and a power of two");
+    fatal("BTB associativity must be non-zero and a power of two (or -1 for no BTB)");
 
   if (!(pred->btb = malloc(sizeof(bpred_btb_t))))
     fatal("cannot allocate BTB");
@@ -276,8 +280,8 @@ void bpred_alloc_retaddr_stack(struct bpred_t* pred, unsigned int retstack_size)
 
 // static
 void bpred_alloc_btb_and_retaddr_stack(struct bpred_t* pred,        /* branch predictory instance */
-                                       unsigned int btb_sets,       /* number of sets in BTB */
-                                       unsigned int btb_assoc,      /* BTB associativity */
+                                       int btb_sets,       /* number of sets in BTB */
+                                       int btb_assoc,      /* BTB associativity */
                                        unsigned int retstack_size)  /* num entries in ret-addr stack */
 {
   bpred_alloc_btb(pred, btb_sets, btb_assoc);

@@ -91,7 +91,7 @@ static int bimod_config[2] = {
 
 /* 2-level predictor config (<num bits> <l1size> <l2size> <hist_size> <xor>) */
 static int twolev_nelt = 5;
-static int twolev_config[5] = { 
+static int twolev_config[5] = {
     2,       // num bits
     1,       // l1size
     1024,    // l2size
@@ -169,12 +169,12 @@ sim_reg_options(struct opt_odb_t *odb)
       FALSE);        // !accrue
 
   opt_reg_int_list(
-      odb, 
+      odb,
       "-bpred:2lev",
       "2-level predictor config "
       "(<num bits> <l1size> <l2size> <hist_size> <xor>)",
-      twolev_config, 
-      twolev_nelt, 
+      twolev_config,
+      twolev_nelt,
       &twolev_nelt,
       twolev_config,  // default
       TRUE,           // print
@@ -193,7 +193,7 @@ sim_reg_options(struct opt_odb_t *odb)
               /* print */TRUE, /* format */NULL);
 
   opt_reg_int_list(odb, "-bpred:btb",
-       "BTB config (<num_sets> <associativity>)",
+       "BTB config (<num_sets> <associativity>) (-1 -1 to disable)",
        btb_config, btb_nelt, &btb_nelt,
        /* default */btb_config,
        /* print */TRUE, /* format */NULL, /* !accrue */FALSE);
