@@ -82,10 +82,12 @@ static unsigned int max_insts;
 /* branch predictor type {nottaken|taken|perfect|bimod|2lev} */
 static char *pred_type;
 
-/* bimodal predictor config (<table_size>) */
-static int bimod_nelt = 1;
-static int bimod_config[1] =
-  { /* bimod tbl size */2048 };
+/* bimodal predictor config (<num bits> <table_size>) */
+static int bimod_nelt = 2;
+static int bimod_config[2] = {
+    2,    // bits
+    2048  // table size
+};
 
 /* 2-level predictor config (<l1size> <l2size> <hist_size> <xor>) */
 static int twolev_nelt = 4;
@@ -150,11 +152,17 @@ sim_reg_options(struct opt_odb_t *odb)
                  &pred_type, /* default */"bimod",
                  /* print */TRUE, /* format */NULL);
 
-  opt_reg_int_list(odb, "-bpred:bimod",
-       "bimodal predictor config (<table size>)",
-       bimod_config, bimod_nelt, &bimod_nelt,
-       /* default */bimod_config,
-       /* print */TRUE, /* format */NULL, /* !accrue */FALSE);
+  opt_reg_int_list(
+      odb,
+      "-bpred:bimod",
+      "bimodal predictor config (<num bits> <table size>)",
+      bimod_config,
+      bimod_nelt,
+      &bimod_nelt,
+      bimod_config,  // default
+      TRUE,          // print
+      NULL,          // format
+      FALSE);        // !accrue
 
   opt_reg_int_list(odb, "-bpred:2lev",
                    "2-level predictor config "
@@ -192,14 +200,15 @@ sim_check_options(struct opt_odb_t *odb, int argc, char **argv)
   } else if (!mystricmp(pred_type, "smartstatic")) {
     pred = bpred_create_smart_static();
   } else if (!mystricmp(pred_type, "bimod")) {
-    if (bimod_nelt != 1)
-      fatal("bad bimod predictor config (<table_size>)");
+    if (bimod_nelt != 2)
+      fatal("bad bimod predictor config (<num bits> <table_size>)");
     if (btb_nelt != 2)
       fatal("bad btb config (<num_sets> <associativity>)");
 
     /* bimodal predictor, bpred_create() checks BTB_SIZE */
-    pred = bpred_create_2bit(
-        bimod_config[0],  // bimod table size
+    pred = bpred_create_nbit(
+        bimod_config[0],  // num saturating counter bits
+        bimod_config[1],  // bimod table size
         btb_config[0],    // btb sets
         btb_config[1],    // btb assoc
         ras_size);        // ret-addr stack size
@@ -222,15 +231,15 @@ sim_check_options(struct opt_odb_t *odb, int argc, char **argv)
     /* combining predictor, bpred_create() checks args */
     if (twolev_nelt != 4)
       fatal("bad 2-level pred config (<l1size> <l2size> <hist_size> <xor>)");
-    if (bimod_nelt != 1)
-      fatal("bad bimod predictor config (<table_size>)");
+    if (bimod_nelt != 2)
+      fatal("bad bimod predictor config (<num bits> <table_size>)");
     if (comb_nelt != 1)
       fatal("bad combining predictor config (<meta_table_size>)");
     if (btb_nelt != 2)
       fatal("bad btb config (<num_sets> <associativity>)");
 
     pred = bpred_create_comb(
-      bimod_config[0],   // bimod table size
+      bimod_config[1],   // bimod table size
       twolev_config[0],  // l1 size
       twolev_config[1],  // l2 size
       comb_config[0],    // meta table size

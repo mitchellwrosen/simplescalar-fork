@@ -86,7 +86,7 @@
  *        PAg          : N, W, 2^W
  *        PAp          : N, W, M (M == 2^(N+W))
  *
- *  BPred2bit:  a simple direct mapped bimodal predictor
+ *  BPredNbit:  a simple direct mapped bimodal predictor
  *
  *    This predictor has a table of two bit saturating counters.
  *    Where counter states 0 & 1 are predict not taken and
@@ -104,12 +104,12 @@
 
 /* branch predictor types */
 enum bpred_class {
-  BPredComb,                    /* combined predictor (McFarling) */
-  BPred2Level,      /* 2-level correlating pred w/2-bit counters */
-  BPred2bit,      /* 2-bit saturating cntr pred (dir mapped) */
-  BPredTaken,      /* static predict taken */
-  BPredNotTaken,    /* static predict not taken */
-  BPredSmartStatic, /* backwards = taken, forwards = not taken */
+  BPredComb,         /* combined predictor (McFarling) */
+  BPred2Level,       /* 2-level correlating pred w/2-bit counters */
+  BPredNbit,         /* n-bit saturating cntr pred (dir mapped) */
+  BPredTaken,        /* static predict taken */
+  BPredNotTaken,     /* static predict not taken */
+  BPredSmartStatic,  /* backwards = taken, forwards = not taken */
   BPred_NUM
 };
 
@@ -124,17 +124,20 @@ struct bpred_btb_ent_t {
 /* direction predictor def */
 struct bpred_dir_t {
   enum bpred_class class;  /* type of predictor */
+
   union {
     struct {
-      unsigned int size;  /* number of entries in direct-mapped table */
+      unsigned int size;     /* number of entries in direct-mapped table */
+      unsigned int nbits;    /* number of bits */
       unsigned char *table;  /* prediction state table */
     } bimod;
     struct {
-      int l1size;    /* level-1 size, number of history regs */
-      int l2size;    /* level-2 size, number of pred states */
-      int shift_width;    /* amount of history in level-1 shift regs */
-      int xor;      /* history xor address flag */
-      int *shiftregs;    /* level-1 history table */
+      int l1size;              /* level-1 size, number of history regs */
+      int l2size;              /* level-2 size, number of pred states */
+      int nbits;               /* number of bits per entry in level-2 */
+      int shift_width;         /* amount of history in level-1 shift regs */
+      int xor;                 /* history xor address flag */
+      int *shiftregs;          /* level-1 history table */
       unsigned char *l2table;  /* level-2 prediction state table */
     } two;
   } config;
@@ -143,10 +146,12 @@ struct bpred_dir_t {
 /* branch predictor def */
 struct bpred_t {
   enum bpred_class class;  /* type of predictor */
+
   struct {
     struct bpred_dir_t *bimod;    /* first direction predictor */
     struct bpred_dir_t *twolev;   /* second direction predictor */
-    struct bpred_dir_t *meta;     /* meta predictor */ } dirpred;
+    struct bpred_dir_t *meta;     /* meta predictor */
+  } dirpred;
 
   struct {
     int sets;      /* num BTB sets */
@@ -161,28 +166,33 @@ struct bpred_t {
   } retstack;
 
   /* stats */
-  counter_t addr_hits;    /* num correct addr-predictions */
-  counter_t dir_hits;    /* num correct dir-predictions (incl addr) */
-  counter_t used_ras;    /* num RAS predictions used */
-  counter_t used_bimod;    /* num bimodal predictions used (BPredComb) */
-  counter_t used_2lev;    /* num 2-level predictions used (BPredComb) */
-  counter_t jr_hits;    /* num correct addr-predictions for JR's */
-  counter_t jr_seen;    /* num JR's seen */
+  counter_t addr_hits;        /* num correct addr-predictions */
+  counter_t dir_hits;         /* num correct dir-predictions (incl addr) */
+  counter_t used_ras;         /* num RAS predictions used */
+  counter_t used_bimod;       /* num bimodal predictions used (BPredComb) */
+  counter_t used_2lev;        /* num 2-level predictions used (BPredComb) */
+  counter_t jr_hits;          /* num correct addr-predictions for JR's */
+  counter_t jr_seen;          /* num JR's seen */
   counter_t jr_non_ras_hits;  /* num correct addr-preds for non-RAS JR's */
   counter_t jr_non_ras_seen;  /* num non-RAS JR's seen */
-  counter_t misses;    /* num incorrect predictions */
+  counter_t misses;           /* num incorrect predictions */
 
-  counter_t lookups;    /* num lookups */
-  counter_t retstack_pops;  /* number of times a value was popped */
+  counter_t lookups;          /* num lookups */
+  counter_t retstack_pops;    /* number of times a value was popped */
   counter_t retstack_pushes;  /* number of times a value was pushed */
-  counter_t ras_hits;    /* num correct return-address predictions */
+  counter_t ras_hits;         /* num correct return-address predictions */
 };
 
 /* branch predictor update information */
 struct bpred_update_t {
-  char *pdir1;    /* direction-1 predictor counter */
-  char *pdir2;    /* direction-2 predictor counter */
-  char *pmeta;    /* meta predictor counter */
+  char *pdir1;  /* direction-1 predictor counter */
+  char *pdir2;  /* direction-2 predictor counter */
+  char *pmeta;  /* meta predictor counter */
+
+  // keep track of if dir1 is bimodal or 2-level
+  // reuse bpred_class enum, even though this can only be BPredNbit or BPred2Level
+  enum bpred_class dir1_class;
+
   struct {    /* predicted directions */
     unsigned int ras    : 1;    /* RAS used */
     unsigned int bimod  : 1;    /* bimodal predictor */
@@ -195,7 +205,8 @@ struct bpred_update_t {
 struct bpred_t* bpred_create_taken();
 struct bpred_t* bpred_create_not_taken();
 struct bpred_t* bpred_create_smart_static();
-struct bpred_t* bpred_create_2bit(
+struct bpred_t* bpred_create_nbit(
+    unsigned int nbits,           /* number of saturating counter bits */
     unsigned int bimod_size,      /* bimod table size */
     unsigned int btb_sets,        /* number of sets in BTB */
     unsigned int btb_assoc,       /* BTB associativity */
@@ -223,7 +234,9 @@ struct bpred_t* bpred_create_comb(
 struct bpred_dir_t* bpred_dir_create_taken();
 struct bpred_dir_t* bpred_dir_create_not_taken();
 struct bpred_dir_t* bpred_dir_create_smart_static();
-struct bpred_dir_t* bpred_dir_create_2bit(unsigned int table_size);
+struct bpred_dir_t* bpred_dir_create_nbit(
+    unsigned int table_size,
+    unsigned int nbits);
 struct bpred_dir_t* bpred_dir_create_2level(
     unsigned int l1size,       /* level-1 table size */
     unsigned int l2size,       /* level-2 table size (if relevant) */

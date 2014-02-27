@@ -77,9 +77,22 @@ static void bpred_alloc_btb_and_retaddr_stack(
     unsigned int retstack_size);
 
 static struct bpred_dir_t* bpred_dir_alloc(enum bpred_class class);
-static void initialize_ones_and_twos(unsigned char* data, int size);
+static void initialize_weak_counters(unsigned char* data, int size, unsigned int nbits);
 
 static int is_stateless(struct bpred_t* pred);
+
+static int get_bimod_max(struct bpred_t* pred);
+static int get_2lev_max(struct bpred_t* pred);
+static int get_meta_max(struct bpred_t* pred);
+
+static int get_bimod_halfway(struct bpred_t* pred);
+static int get_2lev_halfway(struct bpred_t* pred);
+static int get_meta_halfway(struct bpred_t* pred);
+
+// Get the primary/secondary predictor's max val. Requires |pred| for the value, and
+// |dir_update_ptr| to determine what the primary/secondary predictor is.
+static int get_dir1_max(struct bpred_t* pred, struct bpred_update_t* dir_update_ptr);
+static int get_dir2_max(struct bpred_t* pred, struct bpred_update_t* dir_update_ptr);
 
 struct bpred_t* bpred_create_taken() {
   return bpred_alloc(BPredTaken);
@@ -94,14 +107,15 @@ struct bpred_t* bpred_create_smart_static() {
 }
 
 struct bpred_t*  /* branch predictory instance */
-bpred_create_2bit(
+bpred_create_nbit(
+    unsigned int nbits,          /* number of saturating counter bits */
     unsigned int bimod_size,     /* bimod table size */
     unsigned int btb_sets,       /* number of sets in BTB */
     unsigned int btb_assoc,      /* BTB associativity */
     unsigned int retstack_size)  /* num entries in ret-addr stack */
 {
-  struct bpred_t* pred = bpred_alloc(BPred2bit);
-  pred->dirpred.bimod = bpred_dir_create_2bit(bimod_size);
+  struct bpred_t* pred = bpred_alloc(BPredNbit);
+  pred->dirpred.bimod = bpred_dir_create_nbit(bimod_size, nbits);
   bpred_alloc_btb_and_retaddr_stack(pred, btb_sets, btb_assoc, retstack_size);
   return pred;
 }
@@ -134,9 +148,9 @@ struct bpred_t* bpred_create_comb(
     unsigned int retstack_size)  /* num entries in ret-addr stack */
 {
   struct bpred_t* pred = bpred_alloc(BPredComb);
-  pred->dirpred.bimod = bpred_dir_create_2bit(bimod_size);
+  pred->dirpred.bimod = bpred_dir_create_nbit(bimod_size, 2); // TODO: don't hardcode
   pred->dirpred.twolev = bpred_dir_create_2level(l1size, l2size, shift_width, xor);
-  pred->dirpred.meta = bpred_dir_create_2bit(meta_size);
+  pred->dirpred.meta = bpred_dir_create_nbit(meta_size, 2); // TODO: expose this "2"?
   bpred_alloc_btb_and_retaddr_stack(pred, btb_sets, btb_assoc, retstack_size);
   return pred;
 }
@@ -215,19 +229,23 @@ struct bpred_dir_t* bpred_dir_create_smart_static() {
   return bpred_dir_alloc(BPredSmartStatic);
 }
 
-struct bpred_dir_t* bpred_dir_create_2bit(unsigned int table_size) {
-  struct bpred_dir_t* pred_dir = bpred_dir_alloc(BPred2bit);
+struct bpred_dir_t* bpred_dir_create_nbit(
+    unsigned int table_size,
+    unsigned int nbits)
+{
+  struct bpred_dir_t* pred_dir = bpred_dir_alloc(BPredNbit);
 
   if (!table_size || (table_size & (table_size-1)) != 0)
-    fatal("2bit table size, `%d', must be non-zero and a power of two", table_size);
+    fatal("%d-bit table size, `%d', must be non-zero and a power of two", nbits, table_size);
 
   pred_dir->config.bimod.size = table_size;
+  pred_dir->config.bimod.nbits = nbits;
 
   if (!(pred_dir->config.bimod.table = calloc(table_size, sizeof(unsigned char))))
-    fatal("cannot allocate 2bit storage");
+    fatal("cannot allocate %d-bit storage", nbits);
 
   // initialize counters to weakly this-or-that
-  initialize_ones_and_twos(pred_dir->config.bimod.table, table_size);
+  initialize_weak_counters(pred_dir->config.bimod.table, table_size, nbits);
 
   return pred_dir;
 }
@@ -262,19 +280,20 @@ struct bpred_dir_t* bpred_dir_create_2level(
     fatal("cannot allocate second level table");
 
   // initialize counters to weakly this-or-that
-  initialize_ones_and_twos(pred_dir->config.two.l2table, l2size);
+  initialize_weak_counters(pred_dir->config.two.l2table, l2size, 2 /*TODO*/);
 
   return pred_dir;
 }
 
 // static
-void initialize_ones_and_twos(unsigned char* data, int size) {
-  int flipflop = 1;
+void initialize_weak_counters(unsigned char* data, int size, unsigned int nbits) {
+  int maxval = (1 << nbits) - 1;
+  int flipflop = maxval/2;
   int i = 0;
 
   for (i = 0; i < size; ++i) {
     data[i] = flipflop;
-    flipflop = 3 - flipflop;
+    flipflop = maxval - flipflop;
   }
 }
 
@@ -304,9 +323,10 @@ void print_bpred_dir_config(
             pred_dir->config.two.l2size);
     break;
 
-  case BPred2bit:
+  case BPredNbit:
     fprintf(stream,
-            "pred_dir: %s: 2-bit: %d entries, direct-mapped\n",
+            "pred_dir: %s: %d-bit: %d entries, direct-mapped\n",
+            pred_dir->config.bimod.nbits,
             name,
             pred_dir->config.bimod.size);
     break;
@@ -350,7 +370,7 @@ print_bpred_config(struct bpred_t *pred,  /* branch predictor instance */
     fprintf(stream, "ret_stack: %d entries", pred->retstack.size);
     break;
 
-  case BPred2bit:
+  case BPredNbit:
     print_bpred_dir_config(pred->dirpred.bimod, "bimod", stream);
 
     fprintf(stream, "btb: %d sets x %d associativity", pred->btb.sets, pred->btb.assoc);
@@ -401,7 +421,7 @@ bpred_reg_stats(struct bpred_t *pred,  /* branch predictor instance */
     case BPred2Level:
       name = "bpred_2lev";
       break;
-    case BPred2bit:
+    case BPredNbit:
       name = "bpred_bimod";
       break;
     case BPredTaken:
@@ -580,7 +600,7 @@ bpred_dir_lookup(
         p = &pred_dir->config.two.l2table[l2index];
       }
       break;
-    case BPred2bit:
+    case BPredNbit:
       p = &pred_dir->config.bimod.table[BIMOD_HASH(pred_dir, baddr)];
       break;
     case BPredTaken:
@@ -602,14 +622,15 @@ bpred_dir_lookup(
    and the non-speculative top-of-stack is returned in stack_recover_idx
    (used for recovering ret-addr stack after mis-predict).  */
 md_addr_t  /* predicted branch target addr */
-bpred_lookup(struct bpred_t *pred,             /* branch predictor instance */
-       md_addr_t baddr,                        /* branch address */
-       md_addr_t btarget,                      /* branch target if taken */
-       enum md_opcode op,                      /* opcode of instruction */
-       int is_call,                            /* non-zero if inst is fn call */
-       int is_return,                          /* non-zero if inst is fn return */
-       struct bpred_update_t *dir_update_ptr,  /* pred state pointer */
-       int *stack_recover_idx)                 /* Non-speculative top-of-stack; used on mispredict recovery */
+bpred_lookup(
+    struct bpred_t* pred,                   /* branch predictor instance */
+    md_addr_t baddr,                        /* branch address */
+    md_addr_t btarget,                      /* branch target if taken */
+    enum md_opcode op,                      /* opcode of instruction */
+    int is_call,                            /* non-zero if inst is fn call */
+    int is_return,                          /* non-zero if inst is fn return */
+    struct bpred_update_t *dir_update_ptr,  /* pred state pointer */
+    int *stack_recover_idx)                 /* Non-speculative top-of-stack; used on mispredict recovery */
 {
   struct bpred_btb_ent_t *pbtb = NULL;
   int index, i;
@@ -632,30 +653,40 @@ bpred_lookup(struct bpred_t *pred,             /* branch predictor instance */
   switch (pred->class) {
     case BPredComb:
       if ((MD_OP_FLAGS(op) & (F_CTRL|F_UNCOND)) != (F_CTRL|F_UNCOND)) {
-        char *bimod, *twolev, *meta;
-        bimod = bpred_dir_lookup (pred->dirpred.bimod, baddr);
-        twolev = bpred_dir_lookup (pred->dirpred.twolev, baddr);
-        meta = bpred_dir_lookup (pred->dirpred.meta, baddr);
+        char* bimod  = bpred_dir_lookup(pred->dirpred.bimod, baddr);
+        char* twolev = bpred_dir_lookup(pred->dirpred.twolev, baddr);
+        char* meta   = bpred_dir_lookup(pred->dirpred.meta, baddr);
+
         dir_update_ptr->pmeta = meta;
-        dir_update_ptr->dir.meta  = (*meta >= 2);
-        dir_update_ptr->dir.bimod = (*bimod >= 2);
-        dir_update_ptr->dir.twolev  = (*twolev >= 2);
-        if (*meta >= 2) {
+
+        dir_update_ptr->dir.meta   = *meta >= get_meta_halfway(pred);
+        dir_update_ptr->dir.bimod  = *bimod >= get_bimod_halfway(pred);
+        dir_update_ptr->dir.twolev = *twolev >= get_2lev_halfway(pred);
+
+        if (*meta >= get_meta_halfway(pred)) {
           dir_update_ptr->pdir1 = twolev;
           dir_update_ptr->pdir2 = bimod;
+
+          dir_update_ptr->dir1_class = BPred2Level;
         } else {
           dir_update_ptr->pdir1 = bimod;
           dir_update_ptr->pdir2 = twolev;
+
+          dir_update_ptr->dir1_class = BPredNbit;
         }
       }
       break;
     case BPred2Level:
-      if ((MD_OP_FLAGS(op) & (F_CTRL|F_UNCOND)) != (F_CTRL|F_UNCOND))
-        dir_update_ptr->pdir1 = bpred_dir_lookup (pred->dirpred.twolev, baddr);
+      if ((MD_OP_FLAGS(op) & (F_CTRL|F_UNCOND)) != (F_CTRL|F_UNCOND)) {
+        dir_update_ptr->pdir1 = bpred_dir_lookup(pred->dirpred.twolev, baddr);
+        dir_update_ptr->dir1_class = BPred2Level;
+      }
       break;
-    case BPred2bit:
-      if ((MD_OP_FLAGS(op) & (F_CTRL|F_UNCOND)) != (F_CTRL|F_UNCOND))
-        dir_update_ptr->pdir1 = bpred_dir_lookup (pred->dirpred.bimod, baddr);
+    case BPredNbit:
+      if ((MD_OP_FLAGS(op) & (F_CTRL|F_UNCOND)) != (F_CTRL|F_UNCOND)) {
+        dir_update_ptr->pdir1 = bpred_dir_lookup(pred->dirpred.bimod, baddr);
+        dir_update_ptr->dir1_class = BPredNbit;
+      }
       break;
     case BPredTaken:
       return btarget;
@@ -806,7 +837,7 @@ bpred_update(
 
   if (dir_update_ptr->dir.ras) {
     pred->used_ras++;
-    if (correct) 
+    if (correct)
       pred->ras_hits++;
   } else if ((MD_OP_FLAGS(op) & (F_CTRL|F_COND)) == (F_CTRL|F_COND)) {
     if (dir_update_ptr->dir.meta)
@@ -935,7 +966,7 @@ bpred_update(
   /* update state (but not for jumps) */
   if (dir_update_ptr->pdir1) {
     if (taken) {
-      if (*dir_update_ptr->pdir1 < 3)
+      if (*dir_update_ptr->pdir1 < get_dir1_max(pred, dir_update_ptr))
         ++*dir_update_ptr->pdir1;
     } else {
       if (*dir_update_ptr->pdir1 > 0)
@@ -947,7 +978,7 @@ bpred_update(
   /* second direction predictor */
   if (dir_update_ptr->pdir2) {
     if (taken) {
-      if (*dir_update_ptr->pdir2 < 3)
+      if (*dir_update_ptr->pdir2 < get_dir2_max(pred, dir_update_ptr))
         ++*dir_update_ptr->pdir2;
     } else { /* not taken */
       if (*dir_update_ptr->pdir2 > 0)
@@ -961,7 +992,7 @@ bpred_update(
       /* we only update meta predictor if directions were different */
       if (dir_update_ptr->dir.twolev == (unsigned int)taken) {
         /* 2-level predictor was correct */
-        if (*dir_update_ptr->pmeta < 3)
+        if (*dir_update_ptr->pmeta < get_meta_max(pred))
           ++*dir_update_ptr->pmeta;
       } else {
         /* bimodal predictor was correct */
@@ -987,6 +1018,77 @@ bpred_update(
     }
   }
 }
+
+// if bits == 3, returns 7
+// static
+int get_bimod_max(struct bpred_t* pred) {
+  return (1 << pred->dirpred.bimod->config.bimod.nbits) - 1;
+}
+
+// if bits == 3, returns 4
+// static
+int get_bimod_halfway(struct bpred_t* pred) {
+  return 1 << (pred->dirpred.bimod->config.bimod.nbits - 1);
+}
+
+// if bits == 3, returns 7
+// static
+int get_2lev_max(struct bpred_t* pred) {
+  return (1 << pred->dirpred.twolev->config.two.nbits) - 1;
+}
+
+// if bits == 3, returns 4
+// static
+int get_2lev_halfway(struct bpred_t* pred) {
+  return 1 << (pred->dirpred.twolev->config.two.nbits - 1);
+}
+
+// if bits == 3, returns 7
+// static
+int get_meta_max(struct bpred_t* pred) {
+  // TODO: This assumes the meta predictor is bimodal.
+  // This assumption is probably made all over the place, anyway.
+  return (1 << pred->dirpred.meta->config.bimod.nbits) - 1;
+}
+
+// if bits == 3, returns 4
+// static
+int get_meta_halfway(struct bpred_t* pred) {
+  // TODO: This assumes the meta predictor is bimodal.
+  // This assumption is probably made all over the place, anyway.
+  return 1 << (pred->dirpred.meta->config.bimod.nbits - 1);
+}
+
+/*
+ * Get the primary predictor's max val. Requires |pred| for the value, and
+ * |dir_update_ptr| to determine what the primary predictor is.
+ *
+ * Assumes dir_update_ptr->dir1 is non-null.
+ *
+ * static
+ */
+int get_dir1_max(struct bpred_t* pred, struct bpred_update_t* dir_update_ptr) {
+  switch (dir_update_ptr->dir1_class) {
+  case BPredNbit:
+    return get_bimod_max(pred);
+  case BPred2Level:
+    return get_2lev_max(pred);
+  default:
+    fatal("Unexpected primary predictor class %s", dir_update_ptr->dir1_class);
+  }
+}
+
+int get_dir2_max(struct bpred_t* pred, struct bpred_update_t* dir_update_ptr) {
+  switch (dir_update_ptr->dir1_class) {
+  case BPredNbit:
+    return get_2lev_max(pred);   // dir1 is bimodal, so dir2 is 2-level
+  case BPred2Level:
+    return get_bimod_max(pred);  // dir1 is 2-level, so dir1 is bimodal
+  default:
+    fatal("Unexpected primary predictor class %s", dir_update_ptr->dir1_class);
+  }
+}
+
 
 // static
 int is_stateless(struct bpred_t* pred) {
