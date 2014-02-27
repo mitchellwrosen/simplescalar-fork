@@ -625,6 +625,7 @@ bpred_lookup(struct bpred_t *pred,             /* branch predictor instance */
   dir_update_ptr->pdir1 = NULL;
   dir_update_ptr->pdir2 = NULL;
   dir_update_ptr->pmeta = NULL;
+
   /* Except for jumps, get a pointer to direction-prediction bits */
   switch (pred->class) {
     case BPredComb:
@@ -735,7 +736,7 @@ bpred_lookup(struct bpred_t *pred,             /* branch predictor instance */
 
   /* if this is a jump, ignore predicted direction; we know it's taken. */
   if ((MD_OP_FLAGS(op) & (F_CTRL|F_UNCOND)) == (F_CTRL|F_UNCOND))
-    return (pbtb ? pbtb->target : 1);
+    return pbtb ? pbtb->target : 1;
 
   /* otherwise we have a conditional branch */
   if (pbtb == NULL) {
