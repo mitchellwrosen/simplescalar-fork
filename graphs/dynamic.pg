@@ -1,0 +1,23 @@
+#!/bin/gnuplot
+
+reset
+set terminal png
+
+set title "Dynamic Branch Prediction"
+
+Bimodal = "#8A2BE2"
+Adaptive = "#008000"
+Combined = "#FF4500"
+
+set auto x
+set yrange [0:1]
+set style data histogram
+set style histogram cluster gap 1
+set style fill solid border -1
+set boxwidth 0.9
+set xtic scale 0
+set key below
+
+plot 'dynamic.dat' using 2:xtic(1) ti col fc rgb Bimodal, \
+'' u 3 ti col fc rgb Adaptive, \
+'' u 4 ti col fc rgb Combined
