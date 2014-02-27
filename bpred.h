@@ -54,6 +54,9 @@
 
 #define dassert(a) assert(a)
 
+#define TAKEN 1
+#define NOT_TAKEN 0
+
 #include <stdio.h>
 
 #include "host.h"
@@ -142,9 +145,8 @@ struct bpred_t {
   enum bpred_class class;  /* type of predictor */
   struct {
     struct bpred_dir_t *bimod;    /* first direction predictor */
-    struct bpred_dir_t *twolev;    /* second direction predictor */
-    struct bpred_dir_t *meta;    /* meta predictor */
-  } dirpred;
+    struct bpred_dir_t *twolev;   /* second direction predictor */
+    struct bpred_dir_t *meta;     /* meta predictor */ } dirpred;
 
   struct {
     int sets;      /* num BTB sets */
@@ -275,22 +277,23 @@ bpred_recover(struct bpred_t *pred,  /* branch predictor instance */
            * used on mispredict recovery */
 
 /* update the branch predictor, only useful for stateful predictors; updates
-   entry for instruction type OP at address BADDR.  BTB only gets updated
-   for branches which are taken.  Inst was determined to jump to
-   address BTARGET and was taken if TAKEN is non-zero.  Predictor
-   statistics are updated with result of prediction, indicated by CORRECT and
-   PRED_TAKEN, predictor state to be updated is indicated by *DIR_UPDATE_PTR
-   (may be NULL for jumps, which shouldn't modify state bits).  Note if
-   bpred_update is done speculatively, branch-prediction may get polluted. */
+ * entry for instruction type OP at address BADDR.  BTB only gets updated
+ * for branches which are taken.  Inst was determined to jump to
+ * address BTARGET and was taken if TAKEN is non-zero.  Predictor
+ * statistics are updated with result of prediction, indicated by CORRECT and
+ * PRED_TAKEN, predictor state to be updated is indicated by *DIR_UPDATE_PTR
+ * (may be NULL for jumps, which shouldn't modify state bits).  Note if
+ * bpred_update is done speculatively, branch-prediction may get polluted.
+ */
 void
-bpred_update(struct bpred_t *pred,  /* branch predictor instance */
-       md_addr_t baddr,    /* branch address */
-       md_addr_t btarget,    /* resolved branch target */
-       int taken,      /* non-zero if branch was taken */
-       int pred_taken,    /* non-zero if branch was pred taken */
-       int correct,    /* was earlier prediction correct? */
-       enum md_opcode op,    /* opcode of instruction */
-       struct bpred_update_t *dir_update_ptr); /* pred state pointer */
+bpred_update(struct bpred_t *pred,              /* branch predictor instance */
+       md_addr_t baddr,                         /* branch address */
+       md_addr_t btarget,                       /* resolved branch target */
+       int taken,                               /* non-zero if branch was taken */
+       int pred_taken,                          /* non-zero if branch was pred taken */
+       int correct,                             /* was earlier prediction correct? */
+       enum md_opcode op,                       /* opcode of instruction */
+       struct bpred_update_t *dir_update_ptr);  /* pred state pointer */
 
 
 #ifdef foo0

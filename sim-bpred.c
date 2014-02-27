@@ -345,7 +345,8 @@ sim_uninit(void)
  */
 
 /* next program counter */
-#define SET_NPC(EXPR)    (regs.regs_NPC = (EXPR))
+#define NPC           (regs.regs_NPC)
+#define SET_NPC(EXPR) (regs.regs_NPC = (EXPR))
 
 /* target program counter */
 #undef  SET_TPC
@@ -353,6 +354,11 @@ sim_uninit(void)
 
 /* current program counter */
 #define CPC      (regs.regs_PC)
+
+/* go to next instruction */
+#define UPDATE_PC                     \
+  regs.regs_PC = regs.regs_NPC;       \
+  regs.regs_NPC += sizeof(md_inst_t);
 
 /* general purpose registers */
 #define GPR(N)      (regs.regs_R[N])
@@ -434,115 +440,116 @@ sim_main(void)
   fprintf(stderr, "sim: ** starting functional simulation w/ predictors **\n");
 
   /* set up initial default next PC */
-  regs.regs_NPC = regs.regs_PC + sizeof(md_inst_t);
+  SET_NPC(CPC + sizeof(md_inst_t));
 
   /* check for DLite debugger entry condition */
   if (dlite_check_break(regs.regs_PC, /* no access */0, /* addr */0, 0, 0))
     dlite_main(regs.regs_PC - sizeof(md_inst_t), regs.regs_PC,
          sim_num_insn, &regs, mem);
 
-  while (TRUE)
-    {
-      /* maintain $r0 semantics */
-      regs.regs_R[MD_REG_ZERO] = 0;
+  while (TRUE) {
+    /* maintain $r0 semantics */
+    regs.regs_R[MD_REG_ZERO] = 0;
+
 #ifdef TARGET_ALPHA
-      regs.regs_F.d[MD_REG_ZERO] = 0.0;
-#endif /* TARGET_ALPHA */
+    regs.regs_F.d[MD_REG_ZERO] = 0.0;
+#endif
 
-      /* get the next instruction to execute */
-      MD_FETCH_INST(inst, mem, regs.regs_PC);
+    /* get the next instruction to execute */
+    MD_FETCH_INST(inst, mem, regs.regs_PC);
 
-      /* keep an instruction count */
-      sim_num_insn++;
+    /* keep an instruction count */
+    sim_num_insn++;
 
-      /* set default reference address and access mode */
-      addr = 0; is_write = FALSE;
+    /* set default reference address and access mode */
+    addr = 0;
+    is_write = FALSE;
 
-      /* set default fault - none */
-      fault = md_fault_none;
+    /* set default fault - none */
+    fault = md_fault_none;
 
-      /* decode the instruction */
-      MD_SET_OPCODE(op, inst);
+    /* decode the instruction */
+    MD_SET_OPCODE(op, inst);
 
-      /* execute the instruction */
-      switch (op)
-  {
-#define DEFINST(OP,MSK,NAME,OPFORM,RES,FLAGS,O1,O2,I1,I2,I3)    \
-  case OP:              \
-          SYMCAT(OP,_IMPL);            \
-          break;
-#define DEFLINK(OP,MSK,NAME,MASK,SHIFT)          \
-        case OP:              \
-          panic("attempted to execute a linking opcode");
+    /* execute the instruction */
+    switch (op) {
+#define DEFINST(OP,MSK,NAME,OPFORM,RES,FLAGS,O1,O2,I1,I2,I3) \
+case OP:                                                     \
+        SYMCAT(OP,_IMPL);                                    \
+        break;
+
+#define DEFLINK(OP,MSK,NAME,MASK,SHIFT)                      \
+      case OP:                                               \
+        panic("attempted to execute a linking opcode");
+
 #define CONNECT(OP)
+
 #define DECLARE_FAULT(FAULT)            \
-    { fault = (FAULT); break; }
+  { fault = (FAULT); break; }
 #include "machine.def"
-  default:
-    panic("attempted to execute a bogus opcode");
-      }
+default:
+  panic("attempted to execute a bogus opcode");
+    }
 
-      if (fault != md_fault_none)
-  fatal("fault (%d) detected @ 0x%08p", fault, regs.regs_PC);
+    if (fault != md_fault_none)
+      fatal("fault (%d) detected @ 0x%08p", fault, regs.regs_PC);
 
-      if (MD_OP_FLAGS(op) & F_MEM)
-  {
-    sim_num_refs++;
-    if (MD_OP_FLAGS(op) & F_STORE)
-      is_write = TRUE;
-  }
+    if (MD_OP_FLAGS(op) & F_MEM) {
+      sim_num_refs++;
+      if (MD_OP_FLAGS(op) & F_STORE)
+        is_write = TRUE;
+    }
 
-      if (MD_OP_FLAGS(op) & F_CTRL)
-  {
-    md_addr_t pred_PC;
-    struct bpred_update_t update_rec;
+    if (MD_OP_FLAGS(op) & F_CTRL) {
+      md_addr_t pred_PC;
+      struct bpred_update_t update_rec;
 
-    sim_num_branches++;
+      sim_num_branches++;
 
-    if (pred)
-      {
+      if (pred) {
         /* get the next predicted fetch address */
-        pred_PC = bpred_lookup(pred,
-             /* branch addr */regs.regs_PC,
-             /* target */target_PC,
-             /* inst opcode */op,
-             /* call? */MD_IS_CALL(op),
-             /* return? */MD_IS_RETURN(op),
-             /* stash an update ptr */&update_rec,
-             /* stash return stack ptr */&stack_idx);
+        pred_PC = bpred_lookup(
+            pred,
+            regs.regs_PC,      // branch addr
+            target_PC,         // target addr
+            op,                // instruction opcode
+            MD_IS_CALL(op),    // call?
+            MD_IS_RETURN(op),  // return?
+            &update_rec,       // stack an update ptr
+            &stack_idx);       // stash return stack ptr
 
         /* valid address returned from branch predictor? */
-        if (!pred_PC)
-    {
-      /* no predicted taken target, attempt not taken target */
-      pred_PC = regs.regs_PC + sizeof(md_inst_t);
-    }
+        if (!pred_PC) {
+          /* no predicted taken target, attempt not taken target */
+          pred_PC = regs.regs_PC + sizeof(md_inst_t);
+        }
 
-        bpred_update(pred,
-         /* branch addr */regs.regs_PC,
-         /* resolved branch target */regs.regs_NPC,
-         /* taken? */regs.regs_NPC != (regs.regs_PC +
-               sizeof(md_inst_t)),
-         /* pred taken? */pred_PC != (regs.regs_PC +
-              sizeof(md_inst_t)),
-         /* correct pred? */pred_PC == regs.regs_NPC,
-         /* opcode */op,
-         /* predictor update pointer */&update_rec);
+        bpred_update(
+            pred,
+            CPC,                                 // branch addr
+            NPC,                                 // resolved branch target
+            NPC != CPC + sizeof(md_inst_t),      // taken?
+            pred_PC != CPC + sizeof(md_inst_t),  // pred taken?
+            pred_PC == NPC,                      // correct pred?
+            op,                                  // opcode
+            &update_rec);                        // predictor update pointer
       }
-  }
-
-      /* check for DLite debugger entry condition */
-      if (dlite_check_break(regs.regs_NPC,
-          is_write ? ACCESS_WRITE : ACCESS_READ,
-          addr, sim_num_insn, sim_num_insn))
-  dlite_main(regs.regs_PC, regs.regs_NPC, sim_num_insn, &regs, mem);
-
-      /* go to the next instruction */
-      regs.regs_PC = regs.regs_NPC;
-      regs.regs_NPC += sizeof(md_inst_t);
-
-      /* finish early? */
-      if (max_insts && sim_num_insn >= max_insts)
-  return;
     }
+
+    /* check for DLite debugger entry condition */
+    if (dlite_check_break(NPC,
+                          is_write ? ACCESS_WRITE : ACCESS_READ,
+                          addr,
+                          sim_num_insn,
+                          sim_num_insn)) {
+      dlite_main(regs.regs_PC, NPC, sim_num_insn, &regs, mem);
+    }
+
+    /* go to the next instruction */
+    UPDATE_PC
+
+    /* finish early? */
+    if (max_insts && sim_num_insn >= max_insts)
+      return;
+  }
 }

@@ -79,6 +79,8 @@ static void bpred_alloc_btb_and_retaddr_stack(
 static struct bpred_dir_t* bpred_dir_alloc(enum bpred_class class);
 static void initialize_ones_and_twos(unsigned char* data, int size);
 
+static int is_stateless(struct bpred_t* pred);
+
 struct bpred_t* bpred_create_taken() {
   return bpred_alloc(BPredTaken);
 }
@@ -736,20 +738,16 @@ bpred_lookup(struct bpred_t *pred,             /* branch predictor instance */
 
   /* if this is a jump, ignore predicted direction; we know it's taken. */
   if ((MD_OP_FLAGS(op) & (F_CTRL|F_UNCOND)) == (F_CTRL|F_UNCOND))
-    return pbtb ? pbtb->target : 1;
+    return pbtb ? pbtb->target : TAKEN;
 
   /* otherwise we have a conditional branch */
   if (pbtb == NULL) {
     /* BTB miss -- just return a predicted direction */
-    return ((*(dir_update_ptr->pdir1) >= 2)
-      ? /* taken */ 1
-      : /* not taken */ 0);
+    return (*(dir_update_ptr->pdir1) >= 2) ? TAKEN : NOT_TAKEN;
   }
   else {
     /* BTB hit, so return target if it's a predicted-taken branch */
-    return ((*(dir_update_ptr->pdir1) >= 2)
-      ? /* taken */ pbtb->target
-      : /* not taken */ 0);
+    return (*(dir_update_ptr->pdir1) >= 2) ? pbtb->target : NOT_TAKEN;
   }
 }
 
@@ -778,21 +776,21 @@ bpred_recover(struct bpred_t *pred,  /* branch predictor instance */
    (may be NULL for jumps, which shouldn't modify state bits).  Note if
    bpred_update is done speculatively, branch-prediction may get polluted. */
 void
-bpred_update(struct bpred_t *pred,  /* branch predictor instance */
-       md_addr_t baddr,    /* branch address */
-       md_addr_t btarget,    /* resolved branch target */
-       int taken,      /* non-zero if branch was taken */
-       int pred_taken,    /* non-zero if branch was pred taken */
-       int correct,    /* was earlier addr prediction ok? */
-       enum md_opcode op,    /* opcode of instruction */
-       struct bpred_update_t *dir_update_ptr)/* pred state pointer */
+bpred_update(
+    struct bpred_t *pred,                   /* branch predictor instance */
+    md_addr_t baddr,                        /* branch address */
+    md_addr_t btarget,                      /* resolved branch target */
+    int taken,                              /* non-zero if branch was taken */
+    int pred_taken,                         /* non-zero if branch was pred taken */
+    int correct,                            /* was earlier addr prediction ok? */
+    enum md_opcode op,                      /* opcode of instruction */
+    struct bpred_update_t *dir_update_ptr)  /* pred state pointer */
 {
   struct bpred_btb_ent_t *pbtb = NULL;
   struct bpred_btb_ent_t *lruhead = NULL, *lruitem = NULL;
   int index, i;
 
-  /* don't change bpred state for non-branch instructions or if this
-   * is a stateless predictor*/
+  // don't change bpred state for non-branch instructions or if this is a stateless predictor
   if (!(MD_OP_FLAGS(op) & F_CTRL))
     return;
 
@@ -806,43 +804,35 @@ bpred_update(struct bpred_t *pred,  /* branch predictor instance */
   else
     pred->misses++;
 
-  if (dir_update_ptr->dir.ras)
-    {
-      pred->used_ras++;
-      if (correct)
-  pred->ras_hits++;
-    }
-  else if ((MD_OP_FLAGS(op) & (F_CTRL|F_COND)) == (F_CTRL|F_COND))
-    {
-      if (dir_update_ptr->dir.meta)
-  pred->used_2lev++;
-      else
-  pred->used_bimod++;
-    }
+  if (dir_update_ptr->dir.ras) {
+    pred->used_ras++;
+    if (correct) 
+      pred->ras_hits++;
+  } else if ((MD_OP_FLAGS(op) & (F_CTRL|F_COND)) == (F_CTRL|F_COND)) {
+    if (dir_update_ptr->dir.meta)
+      pred->used_2lev++;
+    else
+      pred->used_bimod++;
+  }
 
   /* keep stats about JR's; also, but don't change any bpred state for JR's
    * which are returns unless there's no retstack */
-  if (MD_IS_INDIR(op))
-    {
-      pred->jr_seen++;
-      if (correct)
-  pred->jr_hits++;
-
-      if (!dir_update_ptr->dir.ras)
-  {
-    pred->jr_non_ras_seen++;
+  if (MD_IS_INDIR(op)) {
+    pred->jr_seen++;
     if (correct)
-      pred->jr_non_ras_hits++;
-  }
-      else
-  {
-    /* return that used the ret-addr stack; no further work to do */
-    return;
-  }
-    }
+      pred->jr_hits++;
 
-  /* Can exit now if this is a stateless predictor */
-  if (pred->class == BPredNotTaken || pred->class == BPredTaken || pred->class == BPredSmartStatic)
+    if (!dir_update_ptr->dir.ras) {
+      pred->jr_non_ras_seen++;
+      if (correct)
+        pred->jr_non_ras_hits++;
+    } else {
+      /* return that used the ret-addr stack; no further work to do */
+      return;
+    }
+  }
+
+  if (is_stateless(pred))
     return;
 
   /*
@@ -864,83 +854,77 @@ bpred_update(struct bpred_t *pred,  /* branch predictor instance */
   /* update L1 table if appropriate */
   /* L1 table is updated unconditionally for combining predictor too */
   if ((MD_OP_FLAGS(op) & (F_CTRL|F_UNCOND)) != (F_CTRL|F_UNCOND) &&
-      (pred->class == BPred2Level || pred->class == BPredComb))
-    {
-      int l1index, shift_reg;
+      (pred->class == BPred2Level || pred->class == BPredComb)) {
+    int l1index, shift_reg;
 
-      /* also update appropriate L1 history register */
-      l1index =
-  (baddr >> MD_BR_SHIFT) & (pred->dirpred.twolev->config.two.l1size - 1);
-      shift_reg =
-  (pred->dirpred.twolev->config.two.shiftregs[l1index] << 1) | (!!taken);
-      pred->dirpred.twolev->config.two.shiftregs[l1index] =
-  shift_reg & ((1 << pred->dirpred.twolev->config.two.shift_width) - 1);
-    }
+    /* also update appropriate L1 history register */
+    l1index = (baddr >> MD_BR_SHIFT) & (pred->dirpred.twolev->config.two.l1size - 1);
+    shift_reg = (pred->dirpred.twolev->config.two.shiftregs[l1index] << 1) | (!!taken);
+    pred->dirpred.twolev->config.two.shiftregs[l1index] =
+        shift_reg & ((1 << pred->dirpred.twolev->config.two.shift_width) - 1);
+  }
 
   /* find BTB entry if it's a taken branch (don't allocate for non-taken) */
-  if (taken)
-    {
-      index = (baddr >> MD_BR_SHIFT) & (pred->btb.sets - 1);
+  if (taken) {
+    index = (baddr >> MD_BR_SHIFT) & (pred->btb.sets - 1);
+    if (pred->btb.assoc > 1) {
+      index *= pred->btb.assoc;
 
-      if (pred->btb.assoc > 1)
-  {
-    index *= pred->btb.assoc;
+      /* Now we know the set; look for a PC match; also identify MRU and LRU items */
+      for (i = index; i < (index+pred->btb.assoc) ; i++) {
+        if (pred->btb.btb_data[i].addr == baddr) {
+          /* match */
+          assert(!pbtb);
+          pbtb = &pred->btb.btb_data[i];
+        }
 
-    /* Now we know the set; look for a PC match; also identify
-     * MRU and LRU items */
-    for (i = index; i < (index+pred->btb.assoc) ; i++)
-      {
-        if (pred->btb.btb_data[i].addr == baddr)
-    {
-      /* match */
-      assert(!pbtb);
-      pbtb = &pred->btb.btb_data[i];
-    }
+        dassert(pred->btb.btb_data[i].prev != pred->btb.btb_data[i].next);
 
-        dassert(pred->btb.btb_data[i].prev
-          != pred->btb.btb_data[i].next);
-        if (pred->btb.btb_data[i].prev == NULL)
-    {
-      /* this is the head of the lru list, ie current MRU item */
-      dassert(lruhead == NULL);
-      lruhead = &pred->btb.btb_data[i];
-    }
-        if (pred->btb.btb_data[i].next == NULL)
-    {
-      /* this is the tail of the lru list, ie the LRU item */
-      dassert(lruitem == NULL);
-      lruitem = &pred->btb.btb_data[i];
-    }
+        if (pred->btb.btb_data[i].prev == NULL) {
+          /* this is the head of the lru list, ie current MRU item */
+          dassert(lruhead == NULL);
+          lruhead = &pred->btb.btb_data[i];
+        }
+
+        if (pred->btb.btb_data[i].next == NULL) {
+          /* this is the tail of the lru list, ie the LRU item */
+          dassert(lruitem == NULL);
+          lruitem = &pred->btb.btb_data[i];
+        }
       }
-    dassert(lruhead && lruitem);
 
-    if (!pbtb)
-      /* missed in BTB; choose the LRU item in this set as the victim */
-      pbtb = lruitem;
-    /* else hit, and pbtb points to matching BTB entry */
+      dassert(lruhead && lruitem);
 
-    /* Update LRU state: selected item, whether selected because it
-     * matched or because it was LRU and selected as a victim, becomes
-     * MRU */
-    if (pbtb != lruhead)
-      {
+      if (!pbtb) {
+        /* missed in BTB; choose the LRU item in this set as the victim */
+        pbtb = lruitem;
+      } else {
+        /* else hit, and pbtb points to matching BTB entry */
+      }
+
+      /* Update LRU state: selected item, whether selected because it
+       * matched or because it was LRU and selected as a victim, becomes
+       * MRU */
+      if (pbtb != lruhead) {
         /* this splices out the matched entry... */
         if (pbtb->prev)
-    pbtb->prev->next = pbtb->next;
+          pbtb->prev->next = pbtb->next;
         if (pbtb->next)
-    pbtb->next->prev = pbtb->prev;
+          pbtb->next->prev = pbtb->prev;
+
         /* ...and this puts the matched entry at the head of the list */
         pbtb->next = lruhead;
         pbtb->prev = NULL;
         lruhead->prev = pbtb;
         dassert(pbtb->prev || pbtb->next);
         dassert(pbtb->prev != pbtb->next);
+      } else {
+        /* else pbtb is already MRU item; do nothing */
       }
-    /* else pbtb is already MRU item; do nothing */
-  }
-      else
-  pbtb = &pred->btb.btb_data[index];
+    } else {
+      pbtb = &pred->btb.btb_data[index];
     }
+  }
 
   /*
    * Now 'p' is a possibly null pointer into the direction prediction table,
@@ -949,74 +933,62 @@ bpred_update(struct bpred_t *pred,  /* branch predictor instance */
    */
 
   /* update state (but not for jumps) */
-  if (dir_update_ptr->pdir1)
-    {
-      if (taken)
-  {
-    if (*dir_update_ptr->pdir1 < 3)
-      ++*dir_update_ptr->pdir1;
-  }
-      else
-  { /* not taken */
-    if (*dir_update_ptr->pdir1 > 0)
-      --*dir_update_ptr->pdir1;
-  }
+  if (dir_update_ptr->pdir1) {
+    if (taken) {
+      if (*dir_update_ptr->pdir1 < 3)
+        ++*dir_update_ptr->pdir1;
+    } else {
+      if (*dir_update_ptr->pdir1 > 0)
+        --*dir_update_ptr->pdir1;
     }
+  }
 
   /* combining predictor also updates second predictor and meta predictor */
   /* second direction predictor */
-  if (dir_update_ptr->pdir2)
-    {
-      if (taken)
-  {
-    if (*dir_update_ptr->pdir2 < 3)
-      ++*dir_update_ptr->pdir2;
-  }
-      else
-  { /* not taken */
-    if (*dir_update_ptr->pdir2 > 0)
-      --*dir_update_ptr->pdir2;
-  }
+  if (dir_update_ptr->pdir2) {
+    if (taken) {
+      if (*dir_update_ptr->pdir2 < 3)
+        ++*dir_update_ptr->pdir2;
+    } else { /* not taken */
+      if (*dir_update_ptr->pdir2 > 0)
+        --*dir_update_ptr->pdir2;
     }
+  }
 
   /* meta predictor */
-  if (dir_update_ptr->pmeta)
-    {
-      if (dir_update_ptr->dir.bimod != dir_update_ptr->dir.twolev)
-  {
-    /* we only update meta predictor if directions were different */
-    if (dir_update_ptr->dir.twolev == (unsigned int)taken)
-      {
+  if (dir_update_ptr->pmeta) {
+    if (dir_update_ptr->dir.bimod != dir_update_ptr->dir.twolev) {
+      /* we only update meta predictor if directions were different */
+      if (dir_update_ptr->dir.twolev == (unsigned int)taken) {
         /* 2-level predictor was correct */
         if (*dir_update_ptr->pmeta < 3)
-    ++*dir_update_ptr->pmeta;
-      }
-    else
-      {
+          ++*dir_update_ptr->pmeta;
+      } else {
         /* bimodal predictor was correct */
         if (*dir_update_ptr->pmeta > 0)
-    --*dir_update_ptr->pmeta;
+          --*dir_update_ptr->pmeta;
       }
-  }
     }
+  }
 
   /* update BTB (but only for taken branches) */
-  if (pbtb)
-    {
-      /* update current information */
-      dassert(taken);
+  if (pbtb) {
+    /* update current information */
+    dassert(taken);
 
-      if (pbtb->addr == baddr)
-  {
-    if (!correct)
+    if (pbtb->addr == baddr) {
+      if (!correct)
+        pbtb->target = btarget;
+    } else {
+      /* enter a new branch in the table */
+      pbtb->addr = baddr;
+      pbtb->op = op;
       pbtb->target = btarget;
-  }
-      else
-  {
-    /* enter a new branch in the table */
-    pbtb->addr = baddr;
-    pbtb->op = op;
-    pbtb->target = btarget;
-  }
     }
+  }
+}
+
+// static
+int is_stateless(struct bpred_t* pred) {
+  return pred->class == BPredNotTaken || pred->class == BPredTaken || pred->class == BPredSmartStatic;
 }
