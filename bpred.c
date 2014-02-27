@@ -550,32 +550,28 @@ bpred_dir_lookup(
   switch (pred_dir->class) {
     case BPred2Level:
       {
-  int l1index, l2index;
+        int l1index, l2index;
+        int temp1, temp2, temp3;
 
         /* traverse 2-level tables */
         l1index = (baddr >> MD_BR_SHIFT) & (pred_dir->config.two.l1size - 1);
         l2index = pred_dir->config.two.shiftregs[l1index];
-        if (pred_dir->config.two.xor)
-    {
-#if 1
-      /* this L2 index computation is more "compatible" to McFarling's
-         verison of it, i.e., if the PC xor address component is only
-         part of the index, take the lower order address bits for the
-         other part of the index, rather than the higher order ones */
-      l2index = (((l2index ^ (baddr >> MD_BR_SHIFT))
-      & ((1 << pred_dir->config.two.shift_width) - 1))
-           | ((baddr >> MD_BR_SHIFT)
-        << pred_dir->config.two.shift_width));
-#else
-      l2index = l2index ^ (baddr >> MD_BR_SHIFT);
-#endif
-    }
-  else
-    {
-      l2index =
-        l2index
-    | ((baddr >> MD_BR_SHIFT) << pred_dir->config.two.shift_width);
-    }
+        if (pred_dir->config.two.xor) {
+          /* this L2 index computation is more "compatible" to McFarling's
+           * verison of it, i.e., if the PC xor address component is only
+           * part of the index, take the lower order address bits for the
+           * other part of the index, rather than the higher order ones
+           */
+          temp1 = l2index ^ (baddr >> MD_BR_SHIFT);
+          temp2 =  (1 << pred_dir->config.two.shift_width) - 1;
+          temp3 = (baddr >> MD_BR_SHIFT) << pred_dir->config.two.shift_width;
+          l2index = temp1 & temp2 | temp3;
+
+          // l2index = l2index ^ (baddr >> MD_BR_SHIFT);
+        } else {
+          l2index = l2index | ((baddr >> MD_BR_SHIFT) << pred_dir->config.two.shift_width);
+        }
+
         l2index = l2index & (pred_dir->config.two.l2size - 1);
 
         /* get a pointer to prediction state information */
