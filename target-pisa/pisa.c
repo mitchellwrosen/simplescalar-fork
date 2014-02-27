@@ -720,3 +720,7 @@ md_addr_t temp_bs, temp_rd;
 
 
 #endif
+
+int is_unconditional_control_op(enum md_opcode op) {
+  return (MD_OP_FLAGS(op) & (F_CTRL|F_UNCOND)) == (F_CTRL|F_UNCOND);
+}

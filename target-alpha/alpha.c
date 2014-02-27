@@ -606,3 +606,7 @@ md_print_insn(md_inst_t inst,		/* instruction to disassemble */
       }
     }
 }
+
+int is_unconditional_control_op(enum md_opcode op) {
+  return (MD_OP_FLAGS(op) & (F_CTRL|F_UNCOND)) == (F_CTRL|F_UNCOND);
+}

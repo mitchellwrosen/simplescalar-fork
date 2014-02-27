@@ -121,6 +121,13 @@ struct bpred_btb_ent_t {
   struct bpred_btb_ent_t *prev, *next; /* lru chaining pointers */
 };
 
+/* a BTB struct */
+typedef struct {
+  int sets;                          /* num BTB sets */
+  int assoc;                         /* BTB associativity */
+  struct bpred_btb_ent_t *btb_data;  /* BTB addr-prediction table */
+} bpred_btb_t;
+
 /* direction predictor def */
 struct bpred_dir_t {
   enum bpred_class class;  /* type of predictor */
@@ -153,16 +160,12 @@ struct bpred_t {
     struct bpred_dir_t *meta;     /* meta predictor */
   } dirpred;
 
-  struct {
-    int sets;      /* num BTB sets */
-    int assoc;      /* BTB associativity */
-    struct bpred_btb_ent_t *btb_data; /* BTB addr-prediction table */
-  } btb;
+  bpred_btb_t* btb;
 
   struct {
-    int size;      /* return-address stack size */
-    int tos;      /* top-of-stack */
-    struct bpred_btb_ent_t *stack; /* return-address stack */
+    int size;                       /* return-address stack size */
+    int tos;                        /* top-of-stack */
+    struct bpred_btb_ent_t *stack;  /* return-address stack */
   } retstack;
 
   /* stats */

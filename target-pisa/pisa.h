@@ -239,6 +239,8 @@ enum md_opcode {
   OP_MAX	/* number of opcodes + NA */
 };
 
+int is_unconditional_control_op(enum md_opcode op);
+
 /* inst -> enum md_opcode mapping, use this macro to decode insts */
 #define MD_OP_ENUM(MSK)		(md_mask2op[MSK])
 extern enum md_opcode md_mask2op[];
