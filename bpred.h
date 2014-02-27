@@ -218,13 +218,15 @@ struct bpred_t* bpred_create_comb(
     unsigned int retstack_size);  /* num entries in ret-addr stack */
 
 /* create a branch direction predictor */
-struct bpred_dir_t *    /* branch direction predictor instance */
-bpred_dir_create (
-  enum bpred_class class,  /* type of predictor to create */
-  unsigned int l1size,    /* level-1 table size */
-  unsigned int l2size,    /* level-2 table size (if relevant) */
-  unsigned int shift_width,  /* history register width */
-  unsigned int xor);       /* history xor address flag */
+struct bpred_dir_t* bpred_dir_create_taken();
+struct bpred_dir_t* bpred_dir_create_not_taken();
+struct bpred_dir_t* bpred_dir_create_smart_static();
+struct bpred_dir_t* bpred_dir_create_2bit(unsigned int table_size);
+struct bpred_dir_t* bpred_dir_create_2level(
+    unsigned int l1size,       /* level-1 table size */
+    unsigned int l2size,       /* level-2 table size (if relevant) */
+    unsigned int shift_width,  /* history register width */
+    unsigned int xor);         /* history xor address flag */
 
 /* print branch predictor configuration */
 void

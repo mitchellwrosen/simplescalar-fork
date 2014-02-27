@@ -76,6 +76,9 @@ static void bpred_alloc_btb_and_retaddr_stack(
     unsigned int btb_assoc,
     unsigned int retstack_size);
 
+static struct bpred_dir_t* bpred_dir_alloc(enum bpred_class class);
+static void initialize_ones_and_twos(unsigned char* data, int size);
+
 struct bpred_t* bpred_create_taken() {
   return bpred_alloc(BPredTaken);
 }
@@ -96,7 +99,7 @@ bpred_create_2bit(
     unsigned int retstack_size)  /* num entries in ret-addr stack */
 {
   struct bpred_t* pred = bpred_alloc(BPred2bit);
-  pred->dirpred.bimod = bpred_dir_create(BPred2bit, bimod_size, 0, 0, 0);
+  pred->dirpred.bimod = bpred_dir_create_2bit(bimod_size);
   bpred_alloc_btb_and_retaddr_stack(pred, btb_sets, btb_assoc, retstack_size);
   return pred;
 }
@@ -112,7 +115,7 @@ bpred_create_2level(
     unsigned int retstack_size)  /* num entries in ret-addr stack */
 {
   struct bpred_t* pred = bpred_alloc(BPred2Level);
-  pred->dirpred.twolev = bpred_dir_create(BPred2Level, l1size, l2size, shift_width, xor);
+  pred->dirpred.twolev = bpred_dir_create_2level(l1size, l2size, shift_width, xor);
   bpred_alloc_btb_and_retaddr_stack(pred, btb_sets, btb_assoc, retstack_size);
   return pred;
 }
@@ -129,9 +132,9 @@ struct bpred_t* bpred_create_comb(
     unsigned int retstack_size)  /* num entries in ret-addr stack */
 {
   struct bpred_t* pred = bpred_alloc(BPredComb);
-  pred->dirpred.bimod = bpred_dir_create(BPred2bit, bimod_size, 0, 0, 0);
-  pred->dirpred.twolev = bpred_dir_create(BPred2Level, l1size, l2size, shift_width, xor);
-  pred->dirpred.meta = bpred_dir_create(BPred2bit, meta_size, 0, 0, 0);
+  pred->dirpred.bimod = bpred_dir_create_2bit(bimod_size);
+  pred->dirpred.twolev = bpred_dir_create_2level(l1size, l2size, shift_width, xor);
+  pred->dirpred.meta = bpred_dir_create_2bit(meta_size);
   bpred_alloc_btb_and_retaddr_stack(pred, btb_sets, btb_assoc, retstack_size);
   return pred;
 }
@@ -198,86 +201,87 @@ void bpred_alloc_btb_and_retaddr_stack(struct bpred_t* pred,        /* branch pr
 }
 
 /* create a branch direction predictor */
-struct bpred_dir_t *    /* branch direction predictor instance */
-bpred_dir_create (
-  enum bpred_class class,    /* type of predictor to create */
-  unsigned int l1size,       /* level-1 table size */
-  unsigned int l2size,       /* level-2 table size (if relevant) */
-  unsigned int shift_width,  /* history register width */
-  unsigned int xor)          /* history xor address flag */
-{
-  struct bpred_dir_t *pred_dir;
-  unsigned int cnt;
-  int flipflop;
+struct bpred_dir_t* bpred_dir_create_taken() {
+  return bpred_dir_alloc(BPredTaken);
+}
 
+struct bpred_dir_t* bpred_dir_create_not_taken() {
+  return bpred_dir_alloc(BPredNotTaken);
+}
+
+struct bpred_dir_t* bpred_dir_create_smart_static() {
+  return bpred_dir_alloc(BPredSmartStatic);
+}
+
+struct bpred_dir_t* bpred_dir_create_2bit(unsigned int table_size) {
+  struct bpred_dir_t* pred_dir = bpred_dir_alloc(BPred2bit);
+
+  if (!table_size || (table_size & (table_size-1)) != 0)
+    fatal("2bit table size, `%d', must be non-zero and a power of two", table_size);
+
+  pred_dir->config.bimod.size = table_size;
+
+  if (!(pred_dir->config.bimod.table = calloc(table_size, sizeof(unsigned char))))
+    fatal("cannot allocate 2bit storage");
+
+  // initialize counters to weakly this-or-that
+  initialize_ones_and_twos(pred_dir->config.bimod.table, table_size);
+
+  return pred_dir;
+}
+
+struct bpred_dir_t* bpred_dir_create_2level(
+    unsigned int l1size,       /* level-1 table size */
+    unsigned int l2size,       /* level-2 table size (if relevant) */
+    unsigned int shift_width,  /* history register width */
+    unsigned int xor)          /* history xor address flag */
+{
+  struct bpred_dir_t* pred_dir = bpred_dir_alloc(BPred2Level);
+
+  if (!l1size || (l1size & (l1size-1)) != 0)
+    fatal("level-1 size, `%d', must be non-zero and a power of two", l1size);
+  pred_dir->config.two.l1size = l1size;
+
+  if (!l2size || (l2size & (l2size-1)) != 0)
+    fatal("level-2 size, `%d', must be non-zero and a power of two", l2size);
+  pred_dir->config.two.l2size = l2size;
+
+  if (!shift_width || shift_width > 30)
+    fatal("shift register width, `%d', must be non-zero, positive, and <30", shift_width);
+  pred_dir->config.two.shift_width = shift_width;
+
+  pred_dir->config.two.xor = xor;
+  pred_dir->config.two.shiftregs = calloc(l1size, sizeof(int));
+  if (!pred_dir->config.two.shiftregs)
+    fatal("cannot allocate shift register table");
+
+  pred_dir->config.two.l2table = calloc(l2size, sizeof(unsigned char));
+  if (!pred_dir->config.two.l2table)
+    fatal("cannot allocate second level table");
+
+  // initialize counters to weakly this-or-that
+  initialize_ones_and_twos(pred_dir->config.two.l2table, l2size);
+
+  return pred_dir;
+}
+
+// static
+void initialize_ones_and_twos(unsigned char* data, int size) {
+  int flipflop = 1;
+  int i = 0;
+
+  for (i = 0; i < size; ++i) {
+    data[i] = flipflop;
+    flipflop = 3 - flipflop;
+  }
+}
+
+// static
+struct bpred_dir_t* bpred_dir_alloc(enum bpred_class class) {
+  struct bpred_dir_t *pred_dir;
   if (!(pred_dir = calloc(1, sizeof(struct bpred_dir_t))))
     fatal("out of virtual memory");
-
-  pred_dir->class = class;
-
-  cnt = -1;
-  switch (class) {
-  case BPred2Level:
-    {
-      if (!l1size || (l1size & (l1size-1)) != 0)
-        fatal("level-1 size, `%d', must be non-zero and a power of two", l1size);
-      pred_dir->config.two.l1size = l1size;
-
-      if (!l2size || (l2size & (l2size-1)) != 0)
-        fatal("level-2 size, `%d', must be non-zero and a power of two", l2size);
-      pred_dir->config.two.l2size = l2size;
-
-      if (!shift_width || shift_width > 30)
-        fatal("shift register width, `%d', must be non-zero and positive", shift_width);
-      pred_dir->config.two.shift_width = shift_width;
-
-      pred_dir->config.two.xor = xor;
-      pred_dir->config.two.shiftregs = calloc(l1size, sizeof(int));
-      if (!pred_dir->config.two.shiftregs)
-        fatal("cannot allocate shift register table");
-
-      pred_dir->config.two.l2table = calloc(l2size, sizeof(unsigned char));
-      if (!pred_dir->config.two.l2table)
-        fatal("cannot allocate second level table");
-
-      /* initialize counters to weakly this-or-that */
-      flipflop = 1;
-      for (cnt = 0; cnt < l2size; cnt++) {
-        pred_dir->config.two.l2table[cnt] = flipflop;
-        flipflop = 3 - flipflop;
-      }
-
-      break;
-    }
-
-  case BPred2bit:
-    if (!l1size || (l1size & (l1size-1)) != 0)
-      fatal("2bit table size, `%d', must be non-zero and a power of two", l1size);
-
-    pred_dir->config.bimod.size = l1size;
-
-    if (!(pred_dir->config.bimod.table = calloc(l1size, sizeof(unsigned char))))
-      fatal("cannot allocate 2bit storage");
-
-    /* initialize counters to weakly this-or-that */
-    flipflop = 1;
-    for (cnt = 0; cnt < l1size; cnt++) {
-      pred_dir->config.bimod.table[cnt] = flipflop;
-      flipflop = 3 - flipflop;
-    }
-
-    break;
-
-  case BPredTaken:
-  case BPredNotTaken:
-  case BPredSmartStatic:
-    /* no other state */
-    break;
-
-  default:
-    panic("bogus branch direction predictor class");
-  }
-
+  pred_dir->class = BPred2bit;
   return pred_dir;
 }
 
