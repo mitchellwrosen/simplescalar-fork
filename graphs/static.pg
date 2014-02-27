@@ -1,0 +1,22 @@
+#!/bin/gnuplot
+
+reset
+set terminal png
+
+set title "Static Branch Prediction"
+
+Taken = "#99ffff"
+NotTaken = "#4671d5"
+SmartStatic = "#ff0000"
+
+set auto x
+set yrange [0:1]
+set style data histogram
+set style histogram cluster gap 1
+set style fill solid border -1
+set boxwidth 0.9
+set xtic scale 0
+
+plot 'static.dat' using 2:xtic(1) ti col fc rgb Taken, \
+'' u 3 ti col fc rgb NotTaken, \
+'' u 4 ti col fc rgb SmartStatic

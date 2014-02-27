@@ -1,0 +1,6 @@
+BenchmarkName "Taken" "Not Taken" "Smart Static"
+"compress95"  0.8733  0.2492      0.8434
+"dijkstra"    0.6108  0.4338      0.7647
+"go"          0.6686  0.5410      0.6155
+"rijndael"    0.7507  0.4072      0.7839
+"sha"         0.9556  0.0589      0.9485
