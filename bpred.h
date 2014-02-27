@@ -185,9 +185,9 @@ struct bpred_t {
 
 /* branch predictor update information */
 struct bpred_update_t {
-  char *pdir1;  /* direction-1 predictor counter */
-  char *pdir2;  /* direction-2 predictor counter */
-  char *pmeta;  /* meta predictor counter */
+  unsigned char *pdir1;  /* direction-1 predictor counter */
+  unsigned char *pdir2;  /* direction-2 predictor counter */
+  unsigned char *pmeta;  /* meta predictor counter */
 
   // keep track of if dir1 is bimodal or 2-level
   // reuse bpred_class enum, even though this can only be BPredNbit or BPred2Level
@@ -212,6 +212,7 @@ struct bpred_t* bpred_create_nbit(
     unsigned int btb_assoc,       /* BTB associativity */
     unsigned int retstack_size);  /* num entries in ret-addr stack */
 struct bpred_t* bpred_create_2level(
+    unsigned int nbits,           /* number of saturating counter bits */
     unsigned int l1size,          /* 2lev l1 table size */
     unsigned int l2size,          /* 2lev l2 table size */
     unsigned int shift_width,     /* history register width */
@@ -238,6 +239,7 @@ struct bpred_dir_t* bpred_dir_create_nbit(
     unsigned int table_size,
     unsigned int nbits);
 struct bpred_dir_t* bpred_dir_create_2level(
+    unsigned int nbits,        /* number of saturating counter bits */
     unsigned int l1size,       /* level-1 table size */
     unsigned int l2size,       /* level-2 table size (if relevant) */
     unsigned int shift_width,  /* history register width */

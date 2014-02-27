@@ -89,10 +89,14 @@ static int bimod_config[2] = {
     2048  // table size
 };
 
-/* 2-level predictor config (<l1size> <l2size> <hist_size> <xor>) */
-static int twolev_nelt = 4;
-static int twolev_config[4] =
-  { /* l1size */1, /* l2size */1024, /* hist */8, /* xor */FALSE};
+/* 2-level predictor config (<num bits> <l1size> <l2size> <hist_size> <xor>) */
+static int twolev_nelt = 5;
+static int twolev_config[5] = { 
+    2,       // num bits
+    1,       // l1size
+    1024,    // l2size
+    8,       // hist
+    FALSE};  // xor
 
 /* combining predictor config (<meta_table_size> */
 static int comb_nelt = 1;
@@ -164,12 +168,18 @@ sim_reg_options(struct opt_odb_t *odb)
       NULL,          // format
       FALSE);        // !accrue
 
-  opt_reg_int_list(odb, "-bpred:2lev",
-                   "2-level predictor config "
-       "(<l1size> <l2size> <hist_size> <xor>)",
-                   twolev_config, twolev_nelt, &twolev_nelt,
-       /* default */twolev_config,
-                   /* print */TRUE, /* format */NULL, /* !accrue */FALSE);
+  opt_reg_int_list(
+      odb, 
+      "-bpred:2lev",
+      "2-level predictor config "
+      "(<num bits> <l1size> <l2size> <hist_size> <xor>)",
+      twolev_config, 
+      twolev_nelt, 
+      &twolev_nelt,
+      twolev_config,  // default
+      TRUE,           // print
+      NULL,           // format
+      FALSE);         // !accrue
 
   opt_reg_int_list(odb, "-bpred:comb",
        "combining predictor config (<meta_table_size>)",
@@ -214,23 +224,24 @@ sim_check_options(struct opt_odb_t *odb, int argc, char **argv)
         ras_size);        // ret-addr stack size
   } else if (!mystricmp(pred_type, "2lev")) {
     /* 2-level adaptive predictor, bpred_create() checks args */
-    if (twolev_nelt != 4)
-      fatal("bad 2-level pred config (<l1size> <l2size> <hist_size> <xor>)");
+    if (twolev_nelt != 5)
+      fatal("bad 2-level pred config (<num bits> <l1size> <l2size> <hist_size> <xor>)");
     if (btb_nelt != 2)
       fatal("bad btb config (<num_sets> <associativity>)");
 
     pred = bpred_create_2level(
-        twolev_config[0],  // l1 size
-        twolev_config[1],  // l2 size
-        twolev_config[2],  // history register size
-        twolev_config[3],  // history xor address
+        twolev_config[0],  // num bits
+        twolev_config[1],  // l1 size
+        twolev_config[2],  // l2 size
+        twolev_config[3],  // history register size
+        twolev_config[4],  // history xor address
         btb_config[0],     // btb sets
         btb_config[1],     // btb assoc
         ras_size);         // ret-addr stack size
   } else if (!mystricmp(pred_type, "comb")) {
     /* combining predictor, bpred_create() checks args */
-    if (twolev_nelt != 4)
-      fatal("bad 2-level pred config (<l1size> <l2size> <hist_size> <xor>)");
+    if (twolev_nelt != 5)
+      fatal("bad 2-level pred config (<num bits> <l1size> <l2size> <hist_size> <xor>)");
     if (bimod_nelt != 2)
       fatal("bad bimod predictor config (<num bits> <table_size>)");
     if (comb_nelt != 1)
@@ -240,11 +251,11 @@ sim_check_options(struct opt_odb_t *odb, int argc, char **argv)
 
     pred = bpred_create_comb(
       bimod_config[1],   // bimod table size
-      twolev_config[0],  // l1 size
-      twolev_config[1],  // l2 size
+      twolev_config[1],  // l1 size
+      twolev_config[2],  // l2 size
       comb_config[0],    // meta table size
-      twolev_config[2],  // history register size
-      twolev_config[3],  // history xor size
+      twolev_config[3],  // history register size
+      twolev_config[4],  // history xor size
       btb_config[0],     // btb sets
       btb_config[1],     // btb assoc
       ras_size);         // ret-addr stack size

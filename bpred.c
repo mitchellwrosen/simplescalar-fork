@@ -81,18 +81,21 @@ static void initialize_weak_counters(unsigned char* data, int size, unsigned int
 
 static int is_stateless(struct bpred_t* pred);
 
-static int get_bimod_max(struct bpred_t* pred);
-static int get_2lev_max(struct bpred_t* pred);
-static int get_meta_max(struct bpred_t* pred);
+static unsigned char get_bimod_max(struct bpred_t* pred);
+static unsigned char get_2lev_max(struct bpred_t* pred);
+static unsigned char get_meta_max(struct bpred_t* pred);
 
-static int get_bimod_halfway(struct bpred_t* pred);
-static int get_2lev_halfway(struct bpred_t* pred);
-static int get_meta_halfway(struct bpred_t* pred);
+static unsigned char get_bimod_halfway(struct bpred_t* pred);
+static unsigned char get_2lev_halfway(struct bpred_t* pred);
+static unsigned char get_meta_halfway(struct bpred_t* pred);
 
-// Get the primary/secondary predictor's max val. Requires |pred| for the value, and
+// Get the primary/secondary predictor's max/halfway val. Requires |pred| for the value, and
 // |dir_update_ptr| to determine what the primary/secondary predictor is.
-static int get_dir1_max(struct bpred_t* pred, struct bpred_update_t* dir_update_ptr);
-static int get_dir2_max(struct bpred_t* pred, struct bpred_update_t* dir_update_ptr);
+static unsigned char get_dir1_max(struct bpred_t* pred, struct bpred_update_t* dir_update_ptr);
+static unsigned char get_dir2_max(struct bpred_t* pred, struct bpred_update_t* dir_update_ptr);
+static unsigned char get_dir1_halfway(struct bpred_t* pred, struct bpred_update_t* dir_update_ptr);
+static unsigned char get_dir2_halfway(struct bpred_t* pred, struct bpred_update_t* dir_update_ptr);
+
 
 struct bpred_t* bpred_create_taken() {
   return bpred_alloc(BPredTaken);
@@ -122,6 +125,7 @@ bpred_create_nbit(
 
 struct bpred_t*  /* branch predictory instance */
 bpred_create_2level(
+    unsigned int nbits,          /* number of saturating counter bits */
     unsigned int l1size,         /* 2lev l1 table size */
     unsigned int l2size,         /* 2lev l2 table size */
     unsigned int shift_width,    /* history register width */
@@ -131,7 +135,7 @@ bpred_create_2level(
     unsigned int retstack_size)  /* num entries in ret-addr stack */
 {
   struct bpred_t* pred = bpred_alloc(BPred2Level);
-  pred->dirpred.twolev = bpred_dir_create_2level(l1size, l2size, shift_width, xor);
+  pred->dirpred.twolev = bpred_dir_create_2level(nbits, l1size, l2size, shift_width, xor);
   bpred_alloc_btb_and_retaddr_stack(pred, btb_sets, btb_assoc, retstack_size);
   return pred;
 }
@@ -149,7 +153,7 @@ struct bpred_t* bpred_create_comb(
 {
   struct bpred_t* pred = bpred_alloc(BPredComb);
   pred->dirpred.bimod = bpred_dir_create_nbit(bimod_size, 2); // TODO: don't hardcode
-  pred->dirpred.twolev = bpred_dir_create_2level(l1size, l2size, shift_width, xor);
+  pred->dirpred.twolev = bpred_dir_create_2level(2, l1size, l2size, shift_width, xor); // TODO
   pred->dirpred.meta = bpred_dir_create_nbit(meta_size, 2); // TODO: expose this "2"?
   bpred_alloc_btb_and_retaddr_stack(pred, btb_sets, btb_assoc, retstack_size);
   return pred;
@@ -239,6 +243,9 @@ struct bpred_dir_t* bpred_dir_create_nbit(
     fatal("%d-bit table size, `%d', must be non-zero and a power of two", nbits, table_size);
 
   pred_dir->config.bimod.size = table_size;
+
+  if (nbits < 1 || nbits > 8)
+    fatal("num bits, `%d', must be between 1 and 8, inclusive", nbits);
   pred_dir->config.bimod.nbits = nbits;
 
   if (!(pred_dir->config.bimod.table = calloc(table_size, sizeof(unsigned char))))
@@ -251,12 +258,17 @@ struct bpred_dir_t* bpred_dir_create_nbit(
 }
 
 struct bpred_dir_t* bpred_dir_create_2level(
+    unsigned int nbits,        /* number of saturating counter bits */
     unsigned int l1size,       /* level-1 table size */
     unsigned int l2size,       /* level-2 table size (if relevant) */
     unsigned int shift_width,  /* history register width */
     unsigned int xor)          /* history xor address flag */
 {
   struct bpred_dir_t* pred_dir = bpred_dir_alloc(BPred2Level);
+
+  if (nbits < 1 || nbits > 8)
+    fatal("num bits, `%d', must be between 1 and 8, inclusive", nbits);
+  pred_dir->config.two.nbits = nbits;
 
   if (!l1size || (l1size & (l1size-1)) != 0)
     fatal("level-1 size, `%d', must be non-zero and a power of two", l1size);
@@ -271,6 +283,7 @@ struct bpred_dir_t* bpred_dir_create_2level(
   pred_dir->config.two.shift_width = shift_width;
 
   pred_dir->config.two.xor = xor;
+
   pred_dir->config.two.shiftregs = calloc(l1size, sizeof(int));
   if (!pred_dir->config.two.shiftregs)
     fatal("cannot allocate shift register table");
@@ -280,7 +293,7 @@ struct bpred_dir_t* bpred_dir_create_2level(
     fatal("cannot allocate second level table");
 
   // initialize counters to weakly this-or-that
-  initialize_weak_counters(pred_dir->config.two.l2table, l2size, 2 /*TODO*/);
+  initialize_weak_counters(pred_dir->config.two.l2table, l2size, nbits);
 
   return pred_dir;
 }
@@ -772,14 +785,14 @@ bpred_lookup(
     return pbtb ? pbtb->target : TAKEN;
 
   /* otherwise we have a conditional branch */
-  if (pbtb == NULL) {
-    /* BTB miss -- just return a predicted direction */
-    return (*(dir_update_ptr->pdir1) >= 2) ? TAKEN : NOT_TAKEN;
-  }
-  else {
-    /* BTB hit, so return target if it's a predicted-taken branch */
-    return (*(dir_update_ptr->pdir1) >= 2) ? pbtb->target : NOT_TAKEN;
-  }
+  unsigned char direction_val = *(dir_update_ptr->pdir1);
+  unsigned char direction_halfway = get_dir1_halfway(pred, dir_update_ptr);
+
+  // if BTB miss, just return a predicted direction (1 or 0). otherwise, return
+  // the target from the BTB hit if it's a predicted-taken branch.
+  md_addr_t taken_target = pbtb == NULL ? TAKEN : pbtb->target;
+
+  return direction_val >= direction_halfway ? taken_target : NOT_TAKEN;
 }
 
 /* Speculative execution can corrupt the ret-addr stack.  So for each
@@ -1021,31 +1034,31 @@ bpred_update(
 
 // if bits == 3, returns 7
 // static
-int get_bimod_max(struct bpred_t* pred) {
+unsigned char get_bimod_max(struct bpred_t* pred) {
   return (1 << pred->dirpred.bimod->config.bimod.nbits) - 1;
 }
 
 // if bits == 3, returns 4
 // static
-int get_bimod_halfway(struct bpred_t* pred) {
+unsigned char get_bimod_halfway(struct bpred_t* pred) {
   return 1 << (pred->dirpred.bimod->config.bimod.nbits - 1);
 }
 
 // if bits == 3, returns 7
 // static
-int get_2lev_max(struct bpred_t* pred) {
+unsigned char get_2lev_max(struct bpred_t* pred) {
   return (1 << pred->dirpred.twolev->config.two.nbits) - 1;
 }
 
 // if bits == 3, returns 4
 // static
-int get_2lev_halfway(struct bpred_t* pred) {
+unsigned char get_2lev_halfway(struct bpred_t* pred) {
   return 1 << (pred->dirpred.twolev->config.two.nbits - 1);
 }
 
 // if bits == 3, returns 7
 // static
-int get_meta_max(struct bpred_t* pred) {
+unsigned char get_meta_max(struct bpred_t* pred) {
   // TODO: This assumes the meta predictor is bimodal.
   // This assumption is probably made all over the place, anyway.
   return (1 << pred->dirpred.meta->config.bimod.nbits) - 1;
@@ -1053,7 +1066,7 @@ int get_meta_max(struct bpred_t* pred) {
 
 // if bits == 3, returns 4
 // static
-int get_meta_halfway(struct bpred_t* pred) {
+unsigned char get_meta_halfway(struct bpred_t* pred) {
   // TODO: This assumes the meta predictor is bimodal.
   // This assumption is probably made all over the place, anyway.
   return 1 << (pred->dirpred.meta->config.bimod.nbits - 1);
@@ -1067,7 +1080,7 @@ int get_meta_halfway(struct bpred_t* pred) {
  *
  * static
  */
-int get_dir1_max(struct bpred_t* pred, struct bpred_update_t* dir_update_ptr) {
+unsigned char get_dir1_max(struct bpred_t* pred, struct bpred_update_t* dir_update_ptr) {
   switch (dir_update_ptr->dir1_class) {
   case BPredNbit:
     return get_bimod_max(pred);
@@ -1078,7 +1091,7 @@ int get_dir1_max(struct bpred_t* pred, struct bpred_update_t* dir_update_ptr) {
   }
 }
 
-int get_dir2_max(struct bpred_t* pred, struct bpred_update_t* dir_update_ptr) {
+unsigned char get_dir2_max(struct bpred_t* pred, struct bpred_update_t* dir_update_ptr) {
   switch (dir_update_ptr->dir1_class) {
   case BPredNbit:
     return get_2lev_max(pred);   // dir1 is bimodal, so dir2 is 2-level
@@ -1089,6 +1102,27 @@ int get_dir2_max(struct bpred_t* pred, struct bpred_update_t* dir_update_ptr) {
   }
 }
 
+unsigned char get_dir1_halfway(struct bpred_t* pred, struct bpred_update_t* dir_update_ptr) {
+  switch (dir_update_ptr->dir1_class) {
+  case BPredNbit:
+    return get_bimod_halfway(pred);
+  case BPred2Level:
+    return get_2lev_halfway(pred);
+  default:
+    fatal("Unexpected primary predictor class %s", dir_update_ptr->dir1_class);
+  }
+}
+
+unsigned char get_dir2_halfway(struct bpred_t* pred, struct bpred_update_t* dir_update_ptr) {
+  switch (dir_update_ptr->dir1_class) {
+  case BPredNbit:
+    return get_2lev_halfway(pred);   // dir1 is bimodal, so dir2 is 2-level
+  case BPred2Level:
+    return get_bimod_halfway(pred);  // dir1 is 2-level, so dir1 is bimodal
+  default:
+    fatal("Unexpected primary predictor class %s", dir_update_ptr->dir1_class);
+  }
+}
 
 // static
 int is_stateless(struct bpred_t* pred) {
